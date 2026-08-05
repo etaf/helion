@@ -21,7 +21,41 @@ import helion.language as hl
 
 
 # %%
-@helion.kernel
+def _rope_fwd_baseline(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Torch reference for rope_fwd, used as the autotuner baseline.
+
+    The autotuner normally computes its accuracy baseline by compiling
+    ``rope_fwd``'s default config. On Intel GPUs (XPU) that default tiles the
+    sequence dimension while materializing all heads x head_dim in fp32, whose
+    scratch (per-thread scratch space) exceeds the hardware PTSS limit, so the
+    baseline compile fails and autotuning aborts before it can search the
+    smaller configs that do fit. Supplying a torch baseline lets the search
+    proceed; it prunes the oversized configs on its own.
+    """
+
+    def apply(x: torch.Tensor) -> torch.Tensor:
+        half = x.shape[-1] // 2
+        cos_first, cos_second = cos[..., :half].float(), cos[..., half:].float()
+        sin_first, sin_second = sin[..., :half].float(), sin[..., half:].float()
+        x_first, x_second = x[..., :half].float(), x[..., half:].float()
+        cos_first = cos_first[:, None]
+        cos_second = cos_second[:, None]
+        sin_first = sin_first[:, None]
+        sin_second = sin_second[:, None]
+        out_first = x_first * cos_first - x_second * sin_first
+        out_second = x_second * cos_second + x_first * sin_second
+        return torch.cat([out_first, out_second], dim=-1).to(x.dtype)
+
+    return apply(q), apply(k)
+
+
+# %%
+@helion.kernel(autotune_baseline_fn=_rope_fwd_baseline)
 def rope_fwd(
     q: torch.Tensor,
     k: torch.Tensor,
