@@ -25,7 +25,22 @@ import helion.language as hl
 # Override default config to work around Triton tl.dot requirement:
 # `AssertionError: Input shapes should have M >= 16, N >= 16 and K >= 32`
 config = None
-if os.environ.get("HELION_AUTOTUNE_EFFORT") == "none":
+if torch.xpu._is_compiled():
+    config = helion.Config(
+        block_sizes=[64, 64, 32],
+        loop_orders=[[0, 1]],
+        l2_groupings=[2],
+        range_unroll_factors=[0, 1],
+        range_num_stages=[0, 1],
+        range_multi_buffers=[None, True],
+        range_flattens=[None, False],
+        load_eviction_policies=["last", ""],
+        num_warps=4,
+        num_stages=2,
+        indexing=["tensor_descriptor", "pointer", "pointer", "pointer", "pointer"],
+        pid_type="flat",
+    )
+elif os.environ.get("HELION_AUTOTUNE_EFFORT") == "none":
     config = helion.Config(block_sizes=[32, 32, 32])
 
 
@@ -58,6 +73,31 @@ def fp8_gemm(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
             # Use hl.dot for FP8 GEMM
             acc = hl.dot(x_tile, y_tile, acc=acc)
         out[tile_m, tile_n] = acc.to(HALF_DTYPE)
+    return out
+
+
+# %%
+@helion.kernel(static_shapes=True, config=config)
+def fp8_gemm_scaled(
+    x: torch.Tensor,
+    y: torch.Tensor,
+    scale_a: torch.Tensor,
+    scale_b: torch.Tensor,
+) -> torch.Tensor:
+    """
+    FP8 GEMM with tensor-wise scales, matching TritonBench's torch._scaled_mm baseline.
+    """
+    m, k = x.size()
+    k2, n = y.size()
+    assert k == k2, f"size mismatch {k} != {k2}"
+    out = torch.empty([m, n], dtype=HALF_DTYPE, device=x.device)
+    for tile_m, tile_n in hl.tile([m, n]):
+        acc = hl.zeros([tile_m, tile_n], dtype=torch.float32)
+        for tile_k in hl.tile(k):
+            x_tile = x[tile_m, tile_k]
+            y_tile = y[tile_k, tile_n]
+            acc = hl.dot(x_tile, y_tile, acc=acc)
+        out[tile_m, tile_n] = (acc * scale_a[()] * scale_b[()]).to(HALF_DTYPE)
     return out
 
 
@@ -107,7 +147,7 @@ def fp8_gemm_tritonbench(
     Returns:
         Callable that returns output tensor in half-precision format.
     """
-    return lambda: fp8_gemm(a, b)
+    return lambda: fp8_gemm_scaled(a, b.t(), scale_a, scale_b)
 
 
 # %%
