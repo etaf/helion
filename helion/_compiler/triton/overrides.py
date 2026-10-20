@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 from torch._inductor import config as inductor_config
 from torch._inductor.codegen.triton import TritonOverrides
+from torch._inductor.codegen.triton import maybe_upcast_float32
 from torch._inductor.codegen.triton import triton_compute_type
 from torch._inductor.virtualized import V
 
@@ -133,6 +134,19 @@ class HelionTritonOverrides(TritonOverrides):
         if inductor_config.use_fast_math:
             return f"tl.minimum({a}, {b})"
         return TritonOverrides.minimum(a, b)
+
+    @staticmethod
+    @maybe_upcast_float32()
+    def exp2(x: str) -> str:
+        """``tl.math.exp2`` under fast_math, as Inductor's ``use_fast_math`` does for exp.
+
+        ``libdevice.exp2`` is the math library's accurate routine; on XPU that
+        is the software ``__imf_exp2f``, while ``tl.math.exp2`` is the
+        hardware exp2.
+        """
+        if inductor_config.use_fast_math:
+            return f"tl_math.exp2({x})"
+        return f"libdevice.exp2({x})"
 
     @staticmethod
     def _can_simplify_div() -> bool:

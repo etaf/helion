@@ -41,7 +41,8 @@ import helion.language as hl
     # Triton backend takes the approximate divide (fast_dividef,
     # div.approx.ftz.f32) for the output normalization (the LSE rescale
     # divides by a constant, which Inductor folds into a multiply) and
-    # Inductor's use_fast_math (flush-to-zero exp; exp2 keeps libdevice).
+    # Inductor's use_fast_math (flush-to-zero exp; exp2 lowers to
+    # tl.math.exp2).
     fast_math=True,
 )
 def helion_flex_attention_kernel(

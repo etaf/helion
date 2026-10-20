@@ -57,7 +57,7 @@ import helion.language as hl
     # exp2 packets, an approximation of ex2.approx, only under this setting;
     # the Triton backend takes the approximate divide (fast_dividef,
     # div.approx.ftz.f32) for the plain divisions (output normalization, the
-    # epilogue's V normalization); exp2 keeps libdevice.
+    # epilogue's V normalization) and lowers exp2 to tl.math.exp2.
     fast_math=True,
     # Use the manual matmul+softmax reference as autotune's correctness anchor.
     # Otherwise `_compute_baseline` compiles Helion's default config, which OOMs
